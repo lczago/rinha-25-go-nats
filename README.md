@@ -10,6 +10,6 @@ Requisição de summary busca no banco as informações atualizadas.
 - [Go](https://go.dev/)
 - [Fiber](https://gofiber.io/)
 - [Nats](https://nats.io/) — JetStream para fila de processamento
-- [Postgres](https://www.postgresql.org/) 
+- [Redis](https://redis.io/) 
 
 [//]: # (## [Source code]&#40;https://github.com/lczago/rinha-25-go-nats&#41;)
