@@ -1,0 +1,10 @@
+# Ignore VCS
+.git
+.gitignore
+
+# IDE/project config
+.idea
+.vscode
+*.iml
+*.ipr
+*.iws
