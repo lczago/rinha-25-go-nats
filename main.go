@@ -17,6 +17,7 @@ func main() {
 	cfg := fiber.Config{
 		JSONEncoder: json.Marshal,
 		JSONDecoder: json.Unmarshal,
+		Concurrency: 2048 * 2,
 	}
 	api := fiber.New(cfg)
 

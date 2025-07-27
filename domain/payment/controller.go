@@ -22,7 +22,7 @@ func (c *Controller) InitRoutes(app *fiber.App) {
 }
 
 func (c *Controller) postPayment(ctx *fiber.Ctx) error {
-	if err := c.paymentQueue.NatsConn.Publish(c.paymentQueue.Subject, ctx.BodyRaw()); err != nil {
+	if _, err := c.paymentQueue.JetStream.PublishAsync(c.paymentQueue.Subject, ctx.BodyRaw()); err != nil {
 		log.Error(err)
 		return ctx.SendStatus(fiber.StatusInternalServerError)
 	}

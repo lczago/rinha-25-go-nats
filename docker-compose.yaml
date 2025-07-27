@@ -3,7 +3,6 @@ x-common-api-env: &common-env
   REDIS_HOST: redis:6379
   PROCESSOR_DEFAULT_URL: http://payment-processor-default:8080
   PROCESSOR_FALLBACK_URL: http://payment-processor-fallback:8080
-  CONSUMER_LIMIT: 50
 
 x-service-templates:
   api: &api

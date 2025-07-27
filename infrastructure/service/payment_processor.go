@@ -3,7 +3,6 @@ package service
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"github.com/goccy/go-json"
 	"net/http"
@@ -47,7 +46,7 @@ func (s *paymentProcessor) processWithClient(
 	input PostPaymentProcessor,
 	processorType ProcessorType,
 ) (ProcessorType, error) {
-	ctx, cancelCtx := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancelCtx := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancelCtx()
 
 	body, _ := json.Marshal(input)
@@ -65,10 +64,8 @@ func (s *paymentProcessor) processWithClient(
 
 	if resp.StatusCode == http.StatusUnprocessableEntity {
 		return "", ErrUnprocessableEntity
-	}
-
-	if resp.StatusCode >= 400 {
-		return "", errors.New("")
+	} else if resp.StatusCode == http.StatusInternalServerError {
+		return "", ErrInternalServerError
 	}
 
 	return processorType, nil

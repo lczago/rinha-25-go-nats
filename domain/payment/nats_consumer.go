@@ -5,7 +5,6 @@ import (
 	"errors"
 	"github.com/goccy/go-json"
 	"github.com/gofiber/fiber/v2/log"
-	"github.com/lib/pq"
 	"github.com/nats-io/nats.go"
 	"os"
 	"rinha-25-go-nats/infrastructure/queue"
@@ -59,8 +58,8 @@ func (c *natsConsumer) StartProcess() error {
 		nats.ManualAck(),
 		nats.DeliverAll(),
 		nats.ReplayInstant(),
-		nats.MaxDeliver(3),
-		nats.MaxAckPending(c.limit),
+		nats.MaxDeliver(2),
+		nats.MaxAckPending(40),
 	)
 	if err != nil {
 		return err
@@ -77,11 +76,7 @@ func (c *natsConsumer) StartProcess() error {
 				log.Error(err)
 				continue
 			}
-			go func() {
-				if err := c.processMessage(msg); err != nil {
-					log.Error(err)
-				}
-			}()
+			go c.processMessage(msg)
 		}
 	}
 
@@ -89,7 +84,7 @@ func (c *natsConsumer) StartProcess() error {
 
 func (c *natsConsumer) processMessage(msg *nats.Msg) error {
 	var payment PostInput
-	if err := json.UnmarshalNoEscape(msg.Data, &payment); err != nil {
+	if err := json.Unmarshal(msg.Data, &payment); err != nil {
 		return err
 	}
 
@@ -104,7 +99,7 @@ func (c *natsConsumer) processMessage(msg *nats.Msg) error {
 			msg.Term()
 			return nil
 		}
-		msg.NakWithDelay(time.Second * 5)
+		msg.NakWithDelay(time.Second * 3)
 		return nil
 	}
 
@@ -115,12 +110,7 @@ func (c *natsConsumer) processMessage(msg *nats.Msg) error {
 		ProcessedAt:   paymentProcessorModel.RequestedAt,
 	}
 	if err = c.repository.Insert(c.ctx, entity); err != nil {
-		var pgErr *pq.Error
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			msg.Term()
-			return nil
-		}
-		msg.NakWithDelay(time.Second * 5)
+		msg.Term()
 		return nil
 	}
 
