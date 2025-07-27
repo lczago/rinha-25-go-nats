@@ -9,9 +9,8 @@ import (
 
 func NewRedis() (*redis.Client, error) {
 	client := redis.NewClient(&redis.Options{
-		Addr:     os.Getenv("REDIS_HOST"),
-		DB:       0,
-		PoolSize: 6,
+		Addr: os.Getenv("REDIS_HOST"),
+		DB:   0,
 	})
 	if err := client.Ping(context.Background()).Err(); err != nil {
 		return nil, err

@@ -54,6 +54,7 @@ func (r *repository) Insert(ctx context.Context, payment Entity) error {
 
 func (r *repository) AggregateSummary(ctx context.Context, summaryDate SummaryDate) (*ProcessorsSummary, error) {
 	result := map[string]Summary{}
+
 	for _, proc := range processors {
 		var (
 			historyKey = summaryHistoryKey(proc)
