@@ -22,7 +22,7 @@ x-service-templates:
     depends_on:
       nats:
         condition: service_healthy
-      redis:
+      postgres:
         condition: service_healthy
 
 services:
