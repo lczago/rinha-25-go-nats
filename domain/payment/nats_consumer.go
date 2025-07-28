@@ -6,10 +6,8 @@ import (
 	"github.com/goccy/go-json"
 	"github.com/gofiber/fiber/v2/log"
 	"github.com/nats-io/nats.go"
-	"os"
 	"rinha-25-go-nats/infrastructure/queue"
 	"rinha-25-go-nats/infrastructure/service"
-	"strconv"
 	"time"
 )
 
@@ -28,17 +26,11 @@ type natsConsumer struct {
 	paymentProcessorService service.IPaymentProcessor
 	ctx                     context.Context
 	cancelCtx               context.CancelFunc
-	limit                   int
 }
 
 func NewNatsConsumer(
 	paymentQueue *queue.PaymentQueue, repository IRepository, paymentProcessorService service.IPaymentProcessor,
 ) IConsumer {
-	var limit = 30
-	limitQuantity := os.Getenv("CONSUMER_LIMIT")
-	if limitQuantity != "" {
-		limit, _ = strconv.Atoi(limitQuantity)
-	}
 	ctx, cancelCtx := context.WithCancel(context.Background())
 	return &natsConsumer{
 		paymentQueue,
@@ -46,7 +38,6 @@ func NewNatsConsumer(
 		paymentProcessorService,
 		ctx,
 		cancelCtx,
-		limit,
 	}
 }
 
@@ -82,10 +73,11 @@ func (c *natsConsumer) StartProcess() error {
 
 }
 
-func (c *natsConsumer) processMessage(msg *nats.Msg) error {
+func (c *natsConsumer) processMessage(msg *nats.Msg) {
 	var payment PostInput
 	if err := json.Unmarshal(msg.Data, &payment); err != nil {
-		return err
+		log.Error(err)
+		return
 	}
 
 	paymentProcessorModel := service.PostPaymentProcessor{
@@ -97,10 +89,10 @@ func (c *natsConsumer) processMessage(msg *nats.Msg) error {
 	if err != nil {
 		if errors.Is(err, service.ErrUnprocessableEntity) {
 			msg.Term()
-			return nil
+			return
 		}
 		msg.NakWithDelay(time.Second * 3)
-		return nil
+		return
 	}
 
 	entity := Entity{
@@ -111,11 +103,11 @@ func (c *natsConsumer) processMessage(msg *nats.Msg) error {
 	}
 	if err = c.repository.Insert(c.ctx, entity); err != nil {
 		msg.Term()
-		return nil
+		return
 	}
 
 	msg.Ack()
-	return nil
+	return
 }
 
 func (c *natsConsumer) Close() {

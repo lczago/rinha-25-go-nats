@@ -21,7 +21,7 @@ func main() {
 	}
 	api := fiber.New(cfg)
 
-	db, err := database.NewRedis()
+	db, err := database.NewPostgres()
 	if err != nil {
 		log.Fatal(err)
 	}
