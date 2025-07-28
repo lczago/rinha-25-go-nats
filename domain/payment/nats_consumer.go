@@ -82,10 +82,10 @@ func (c *natsConsumer) StartProcess() error {
 
 }
 
-func (c *natsConsumer) processMessage(msg *nats.Msg) error {
+func (c *natsConsumer) processMessage(msg *nats.Msg) {
 	var payment PostInput
 	if err := json.Unmarshal(msg.Data, &payment); err != nil {
-		return err
+		log.Error(err)
 	}
 
 	paymentProcessorModel := service.PostPaymentProcessor{
@@ -97,10 +97,10 @@ func (c *natsConsumer) processMessage(msg *nats.Msg) error {
 	if err != nil {
 		if errors.Is(err, service.ErrUnprocessableEntity) {
 			msg.Term()
-			return nil
+			return
 		}
 		msg.NakWithDelay(time.Second * 3)
-		return nil
+		return
 	}
 
 	entity := Entity{
@@ -111,11 +111,11 @@ func (c *natsConsumer) processMessage(msg *nats.Msg) error {
 	}
 	if err = c.repository.Insert(c.ctx, entity); err != nil {
 		msg.Term()
-		return nil
+		return
 	}
 
 	msg.Ack()
-	return nil
+	return
 }
 
 func (c *natsConsumer) Close() {
