@@ -1,10 +1,11 @@
 package queue
 
 import (
-	"github.com/gofiber/fiber/v2/log"
-	"github.com/nats-io/nats.go"
 	"os"
 	"time"
+
+	"github.com/gofiber/fiber/v2/log"
+	"github.com/nats-io/nats.go"
 )
 
 const (
@@ -51,13 +52,16 @@ func NewPaymentQueue() (*PaymentQueue, error) {
 
 func (q *PaymentQueue) createStream() error {
 	now := time.Now().UTC()
+
 	streamCfg := nats.StreamConfig{
-		Name:      streamName,
-		Subjects:  []string{subject},
-		Retention: nats.WorkQueuePolicy,
-		Storage:   nats.MemoryStorage,
-		Replicas:  0,
+		Name:       streamName,
+		Subjects:   []string{subject},
+		Retention:  nats.WorkQueuePolicy,
+		Storage:    nats.MemoryStorage,
+		Replicas:   0,
+		MaxMsgSize: 1024 * 1024,
 	}
+
 	stream, err := q.JetStream.AddStream(&streamCfg)
 	if err != nil {
 		return err

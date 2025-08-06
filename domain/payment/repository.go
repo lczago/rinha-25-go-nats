@@ -2,8 +2,25 @@ package payment
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
+	"rinha-25-go-nats/infrastructure/service"
+	"strconv"
+	"sync"
+	"time"
+
+	"github.com/redis/go-redis/v9"
+)
+
+var processors = []string{
+	string(service.ProcessorTypeDefault),
+	string(service.ProcessorTypeFallback),
+}
+
+var (
+	defaultDataKey     = fmt.Sprintf("summary:%s:data", string(service.ProcessorTypeDefault))
+	defaultHistoryKey  = fmt.Sprintf("summary:%s:history", string(service.ProcessorTypeDefault))
+	fallbackDataKey    = fmt.Sprintf("summary:%s:data", string(service.ProcessorTypeFallback))
+	fallbackHistoryKey = fmt.Sprintf("summary:%s:history", string(service.ProcessorTypeFallback))
 )
 
 type IRepository interface {
@@ -13,101 +30,131 @@ type IRepository interface {
 }
 
 type repository struct {
-	db *sql.DB
+	client *redis.Client
 }
 
-func NewRepository(db *sql.DB) IRepository {
-	return &repository{db}
+func NewRepository(client *redis.Client) IRepository {
+	return &repository{client}
+}
+
+func getDataKey(processor string) string {
+	if processor == string(service.ProcessorTypeDefault) {
+		return defaultDataKey
+	}
+	return fallbackDataKey
+}
+
+func getHistoryKey(processor string) string {
+	if processor == string(service.ProcessorTypeDefault) {
+		return defaultHistoryKey
+	}
+	return fallbackHistoryKey
 }
 
 func (r *repository) Insert(ctx context.Context, payment Entity) error {
-	query := `
-		 INSERT INTO payments (correlation_id, amount, processed_by, processed_at)
-    	 VALUES ($1, $2, $3, $4)
-	`
-	_, err := r.db.ExecContext(
-		ctx,
-		query,
-		payment.CorrelationId,
-		payment.Amount,
-		payment.ProcessedBy,
-		payment.ProcessedAt,
+	var (
+		dataKey    = getDataKey(payment.ProcessedBy)
+		historyKey = getHistoryKey(payment.ProcessedBy)
+		id         = payment.CorrelationId
+		amount     = payment.Amount
+		timestamp  = float64(payment.ProcessedAt.UnixMilli())
 	)
+
+	pipe := r.client.TxPipeline()
+	pipe.HSet(ctx, dataKey, id, amount)
+	pipe.ZAdd(ctx, historyKey, redis.Z{Score: timestamp, Member: id})
+
+	_, err := pipe.Exec(ctx)
 	return err
 }
 
 func (r *repository) AggregateSummary(ctx context.Context, summaryDate SummaryDate) (*ProcessorsSummary, error) {
-	query, args := buildSummaryQuery(summaryDate)
-	rows, err := r.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	result := map[string]Summary{}
+	result := make([]Summary, len(processors))
+	var wg sync.WaitGroup
 
-	for rows.Next() {
-		var processedBy string
-		var totalRequests int
-		var totalAmount float64
+	for idx, proc := range processors {
+		wg.Add(1)
+		go func(idx int, processor string) {
+			defer wg.Done()
 
-		if err = rows.Scan(&processedBy, &totalRequests, &totalAmount); err != nil {
-			return nil, err
-		}
-		result[processedBy] = Summary{
-			TotalRequests: totalRequests,
-			TotalAmount:   totalAmount,
-		}
+			summary, err := r.aggregateForProcessor(ctx, processor, summaryDate)
+			if err != nil {
+				return
+			}
+
+			result[idx] = summary
+		}(idx, proc)
 	}
 
-	out := &ProcessorsSummary{
-		Default:  result["DEFAULT"],
-		FallBack: result["FALLBACK"],
-	}
-	return out, nil
+	wg.Wait()
+
+	return &ProcessorsSummary{
+		Default:  result[0],
+		FallBack: result[1],
+	}, nil
 }
 
-func buildSummaryQuery(summaryDate SummaryDate) (string, []interface{}) {
-	base := `
-		SELECT processed_by, COUNT(*) as total_requests, COALESCE(SUM(amount), 0) as total_amount
-		FROM payments
-	`
-	clauses := []string{}
-	args := []any{}
-	paramIdx := 1
+func (r *repository) aggregateForProcessor(ctx context.Context, processor string, summaryDate SummaryDate) (Summary, error) {
+	var (
+		historyKey = getHistoryKey(processor)
+		dataKey    = getDataKey(processor)
+		from       = int64(0)
+		to         = time.Now().UTC().UnixMilli()
+	)
 
 	if summaryDate.From != nil {
-		clauses = append(clauses, fmt.Sprintf("processed_at >= $%d", paramIdx))
-		args = append(args, *summaryDate.From)
-		paramIdx++
+		from = summaryDate.From.UnixMilli()
 	}
 	if summaryDate.To != nil {
-		clauses = append(clauses, fmt.Sprintf("processed_at < $%d", paramIdx))
-		args = append(args, *summaryDate.To)
-		paramIdx++
+		to = summaryDate.To.UnixMilli()
 	}
 
-	if len(clauses) > 0 {
-		base += " WHERE " + joinClauses(clauses, " AND ")
+	ids, err := r.client.ZRangeByScore(ctx, historyKey, &redis.ZRangeBy{
+		Min: fmt.Sprintf("%d", from),
+		Max: fmt.Sprintf("%d", to),
+	}).Result()
+	if err != nil {
+		return Summary{}, err
 	}
-	base += " GROUP BY processed_by"
-	return base, args
-}
 
-func joinClauses(clauses []string, sep string) string {
-	out := ""
-	for i, c := range clauses {
-		if i > 0 {
-			out += sep
+	totalRequests := len(ids)
+	totalAmount := 0.0
+
+	if totalRequests > 0 {
+		amounts, err := r.client.HMGet(ctx, dataKey, ids...).Result()
+		if err != nil {
+			return Summary{}, err
 		}
-		out += c
+
+		for _, a := range amounts {
+			if a == nil {
+				continue
+			}
+			value, canCast := a.(string)
+			if !canCast {
+				return Summary{}, fmt.Errorf("invalid type for amount")
+			}
+
+			f, err := strconv.ParseFloat(value, 64)
+			if err != nil {
+				return Summary{}, fmt.Errorf("invalid float value: %v", err)
+			}
+			totalAmount += f
+		}
 	}
-	return out
+
+	return Summary{
+		TotalRequests: totalRequests,
+		TotalAmount:   totalAmount,
+	}, nil
 }
 
 func (r *repository) DeleteAll(ctx context.Context) error {
-	query := `
-		 DELETE FROM payments
-	`
-	_, err := r.db.ExecContext(ctx, query)
-	return err
+	return r.client.Del(
+		ctx,
+		defaultDataKey,
+		defaultHistoryKey,
+		fallbackDataKey,
+		fallbackHistoryKey,
+	).Err()
 }
