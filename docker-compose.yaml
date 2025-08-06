@@ -3,7 +3,7 @@ x-common-api-env: &common-env
   REDIS_HOST: redis:6379
   PROCESSOR_DEFAULT_URL: http://payment-processor-default:8080
   PROCESSOR_FALLBACK_URL: http://payment-processor-fallback:8080
-  NATS_MAX_ACK_PENDING: 1000
+  NATS_MAX_ACK_PENDING: 4000
   NATS_MAX_DELIVER: 3
   REDIS_POOL_SIZE: 100
 

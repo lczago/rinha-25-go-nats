@@ -26,7 +26,7 @@ func main() {
 	cfg := fiber.Config{
 		JSONEncoder:           json.Marshal,
 		JSONDecoder:           json.Unmarshal,
-		Concurrency:           4096,
+		Concurrency:           4096 * 2,
 		DisableStartupMessage: true,
 		EnablePrintRoutes:     false,
 		ReduceMemoryUsage:     false,
@@ -36,7 +36,7 @@ func main() {
 	}
 	api := fiber.New(cfg)
 
-	db, err := database.NewPostgres()
+	db, err := database.NewRedis()
 	if err != nil {
 		log.Fatal(err)
 	}
