@@ -3,6 +3,9 @@ x-common-api-env: &common-env
   REDIS_HOST: redis:6379
   PROCESSOR_DEFAULT_URL: http://payment-processor-default:8080
   PROCESSOR_FALLBACK_URL: http://payment-processor-fallback:8080
+  NATS_MAX_ACK_PENDING: 1000
+  NATS_MAX_DELIVER: 3
+  REDIS_POOL_SIZE: 100
 
 x-service-templates:
   api: &api
@@ -13,7 +16,7 @@ x-service-templates:
     deploy:
       resources:
         limits:
-          cpus: '0.425'
+          cpus: '0.45'
           memory: '70MB'
     depends_on:
       nats:
@@ -88,11 +91,11 @@ services:
       - rinha
     ports:
       - "6379:6379"
-    command: [ "redis-server", "--save", "", "--appendonly", "no" ]
+    command: [ "redis-server", "--save", "", "--appendonly", "no", "--io-threads", "4" ]
     deploy:
       resources:
         limits:
-          cpus: "0.35"
+          cpus: "0.3"
           memory: "150MB"
     healthcheck:
       test: [ "CMD", "redis-cli", "ping" ]

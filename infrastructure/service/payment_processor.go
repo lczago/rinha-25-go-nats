@@ -2,71 +2,48 @@ package service
 
 import (
 	"bytes"
-	"context"
 	"fmt"
+	"sync/atomic"
+
 	"github.com/goccy/go-json"
+
 	"net/http"
-	"os"
 	"time"
 )
 
-type ProcessorType string
-
-const (
-	ProcessorTypeDefault  ProcessorType = "DEFAULT"
-	ProcessorTypeFallback ProcessorType = "FALLBACK"
-)
-
-type IPaymentProcessor interface {
-	Process(input PostPaymentProcessor) (ProcessorType, error)
+type processor struct {
+	health      atomic.Bool
+	minRespTime int
+	url         string
+	orderType   ProcessorType
 }
 
-type paymentProcessor struct {
-	defaultUrl  string
-	fallBackUrl string
-}
-
-func NewPaymentProcessorService() IPaymentProcessor {
-	defaultUrl := os.Getenv("PROCESSOR_DEFAULT_URL")
-	fallBackUrl := os.Getenv("PROCESSOR_FALLBACK_URL")
-
-	return &paymentProcessor{defaultUrl, fallBackUrl}
-}
-
-func (s *paymentProcessor) Process(input PostPaymentProcessor) (ProcessorType, error) {
-	pt, err := s.processWithClient(s.defaultUrl, input, ProcessorTypeDefault)
-	if err != nil {
-		return s.processWithClient(s.fallBackUrl, input, ProcessorTypeFallback)
+func (p *processor) resetHealth() {
+	ticker := time.NewTicker(time.Second * 5)
+	for range ticker.C {
+		p.health.Store(false)
 	}
-	return pt, nil
 }
 
-func (s *paymentProcessor) processWithClient(
-	baseURL string,
-	input PostPaymentProcessor,
-	processorType ProcessorType,
-) (ProcessorType, error) {
-	ctx, cancelCtx := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancelCtx()
-
+func (p *processor) processWithClient(input PostPaymentProcessor) error {
 	body, _ := json.Marshal(input)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("%s/payments", baseURL), bytes.NewBuffer(body))
+	req, err := http.NewRequest(http.MethodPost, fmt.Sprintf("%s/payments", p.url), bytes.NewBuffer(body))
 	if err != nil {
-		return "", err
+		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", err
+		return err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusUnprocessableEntity {
-		return "", ErrUnprocessableEntity
+		return ErrUnprocessableEntity
 	} else if resp.StatusCode == http.StatusInternalServerError {
-		return "", ErrInternalServerError
+		return ErrInternalServerError
 	}
 
-	return processorType, nil
+	return nil
 }

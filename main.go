@@ -1,23 +1,38 @@
 package main
 
 import (
-	"github.com/goccy/go-json"
-	"github.com/gofiber/fiber/v2"
-	"github.com/gofiber/fiber/v2/log"
 	"os"
 	"rinha-25-go-nats/domain/payment"
 	"rinha-25-go-nats/infrastructure/database"
 	"rinha-25-go-nats/infrastructure/queue"
 	"rinha-25-go-nats/infrastructure/service"
+	"runtime"
+	"runtime/debug"
+
+	"github.com/goccy/go-json"
+	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/log"
 )
 
 const defaultPort = "9999"
 
 func main() {
+	runtime.GOMAXPROCS(runtime.NumCPU())
+
+	debug.SetGCPercent(500)
+
+	log.SetLevel(log.LevelError)
+
 	cfg := fiber.Config{
-		JSONEncoder: json.Marshal,
-		JSONDecoder: json.Unmarshal,
-		Concurrency: 2048 * 2,
+		JSONEncoder:           json.Marshal,
+		JSONDecoder:           json.Unmarshal,
+		Concurrency:           4096,
+		DisableStartupMessage: true,
+		EnablePrintRoutes:     false,
+		ReduceMemoryUsage:     false,
+		BodyLimit:             1 * 1024 * 1024,
+		StreamRequestBody:     true,
+		DisableKeepalive:      false,
 	}
 	api := fiber.New(cfg)
 
@@ -37,9 +52,9 @@ func main() {
 	paymentProcessorService := service.NewPaymentProcessorService()
 	consumer := payment.NewNatsConsumer(paymentQueue, paymentRepo, paymentProcessorService)
 	defer consumer.Close()
+
 	go func() {
-		err := consumer.StartProcess()
-		if err != nil {
+		if err := consumer.StartProcess(); err != nil {
 			log.Fatal(err)
 		}
 	}()
@@ -48,6 +63,7 @@ func main() {
 	if port == "" {
 		port = defaultPort
 	}
+
 	if err = api.Listen(":" + port); err != nil {
 		log.Fatal(err)
 	}

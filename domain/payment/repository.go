@@ -3,16 +3,25 @@ package payment
 import (
 	"context"
 	"fmt"
-	"github.com/redis/go-redis/v9"
 	"rinha-25-go-nats/infrastructure/service"
 	"strconv"
+	"sync"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 )
 
 var processors = []string{
 	string(service.ProcessorTypeDefault),
 	string(service.ProcessorTypeFallback),
 }
+
+var (
+	defaultDataKey     = fmt.Sprintf("summary:%s:data", string(service.ProcessorTypeDefault))
+	defaultHistoryKey  = fmt.Sprintf("summary:%s:history", string(service.ProcessorTypeDefault))
+	fallbackDataKey    = fmt.Sprintf("summary:%s:data", string(service.ProcessorTypeFallback))
+	fallbackHistoryKey = fmt.Sprintf("summary:%s:history", string(service.ProcessorTypeFallback))
+)
 
 type IRepository interface {
 	Insert(ctx context.Context, payment Entity) error
@@ -28,17 +37,24 @@ func NewRepository(client *redis.Client) IRepository {
 	return &repository{client}
 }
 
-func summaryDataKey(processor string) string {
-	return fmt.Sprintf("summary:%s:data", processor)
+func getDataKey(processor string) string {
+	if processor == string(service.ProcessorTypeDefault) {
+		return defaultDataKey
+	}
+	return fallbackDataKey
 }
-func summaryHistoryKey(processor string) string {
-	return fmt.Sprintf("summary:%s:history", processor)
+
+func getHistoryKey(processor string) string {
+	if processor == string(service.ProcessorTypeDefault) {
+		return defaultHistoryKey
+	}
+	return fallbackHistoryKey
 }
 
 func (r *repository) Insert(ctx context.Context, payment Entity) error {
 	var (
-		dataKey    = summaryDataKey(payment.ProcessedBy)
-		historyKey = summaryHistoryKey(payment.ProcessedBy)
+		dataKey    = getDataKey(payment.ProcessedBy)
+		historyKey = getHistoryKey(payment.ProcessedBy)
 		id         = payment.CorrelationId
 		amount     = payment.Amount
 		timestamp  = float64(payment.ProcessedAt.UnixMilli())
@@ -53,71 +69,92 @@ func (r *repository) Insert(ctx context.Context, payment Entity) error {
 }
 
 func (r *repository) AggregateSummary(ctx context.Context, summaryDate SummaryDate) (*ProcessorsSummary, error) {
-	result := map[string]Summary{}
+	result := make([]Summary, len(processors))
+	var wg sync.WaitGroup
 
-	for _, proc := range processors {
-		var (
-			historyKey = summaryHistoryKey(proc)
-			dataKey    = summaryDataKey(proc)
-			from       = int64(0)
-			to         = time.Now().UTC().UnixMilli()
-		)
+	for idx, proc := range processors {
+		wg.Add(1)
+		go func(idx int, processor string) {
+			defer wg.Done()
 
-		if summaryDate.From != nil {
-			from = summaryDate.From.UnixMilli()
-		}
-		if summaryDate.To != nil {
-			to = summaryDate.To.UnixMilli()
-		}
-
-		ids, err := r.client.ZRangeByScore(ctx, historyKey, &redis.ZRangeBy{
-			Min: fmt.Sprintf("%d", from),
-			Max: fmt.Sprintf("%d", to),
-		}).Result()
-		if err != nil {
-			return nil, err
-		}
-
-		totalRequests := len(ids)
-		totalAmount := 0.0
-
-		if totalRequests > 0 {
-			amounts, err := r.client.HMGet(ctx, dataKey, ids...).Result()
+			summary, err := r.aggregateForProcessor(ctx, processor, summaryDate)
 			if err != nil {
-				return nil, err
+				return
 			}
-			for _, a := range amounts {
-				if a == nil {
-					continue
-				}
-				value, canCast := a.(string)
-				if !canCast {
-					return nil, fmt.Errorf("invalid type for amount")
-				}
 
-				f, err := strconv.ParseFloat(value, 64)
-				if err != nil {
-					return nil, fmt.Errorf("invalid float value: %v", err)
-				}
-				totalAmount += f
-			}
+			result[idx] = summary
+		}(idx, proc)
+	}
+
+	wg.Wait()
+
+	return &ProcessorsSummary{
+		Default:  result[0],
+		FallBack: result[1],
+	}, nil
+}
+
+func (r *repository) aggregateForProcessor(ctx context.Context, processor string, summaryDate SummaryDate) (Summary, error) {
+	var (
+		historyKey = getHistoryKey(processor)
+		dataKey    = getDataKey(processor)
+		from       = int64(0)
+		to         = time.Now().UTC().UnixMilli()
+	)
+
+	if summaryDate.From != nil {
+		from = summaryDate.From.UnixMilli()
+	}
+	if summaryDate.To != nil {
+		to = summaryDate.To.UnixMilli()
+	}
+
+	ids, err := r.client.ZRangeByScore(ctx, historyKey, &redis.ZRangeBy{
+		Min: fmt.Sprintf("%d", from),
+		Max: fmt.Sprintf("%d", to),
+	}).Result()
+	if err != nil {
+		return Summary{}, err
+	}
+
+	totalRequests := len(ids)
+	totalAmount := 0.0
+
+	if totalRequests > 0 {
+		amounts, err := r.client.HMGet(ctx, dataKey, ids...).Result()
+		if err != nil {
+			return Summary{}, err
 		}
-		result[proc] = Summary{
-			TotalRequests: totalRequests,
-			TotalAmount:   totalAmount,
+
+		for _, a := range amounts {
+			if a == nil {
+				continue
+			}
+			value, canCast := a.(string)
+			if !canCast {
+				return Summary{}, fmt.Errorf("invalid type for amount")
+			}
+
+			f, err := strconv.ParseFloat(value, 64)
+			if err != nil {
+				return Summary{}, fmt.Errorf("invalid float value: %v", err)
+			}
+			totalAmount += f
 		}
 	}
 
-	return &ProcessorsSummary{
-		Default:  result["DEFAULT"],
-		FallBack: result["FALLBACK"],
+	return Summary{
+		TotalRequests: totalRequests,
+		TotalAmount:   totalAmount,
 	}, nil
 }
 
 func (r *repository) DeleteAll(ctx context.Context) error {
 	return r.client.Del(
 		ctx,
-		summaryDataKey(string(service.ProcessorTypeDefault)),
-		summaryHistoryKey(string(service.ProcessorTypeDefault)),
+		defaultDataKey,
+		defaultHistoryKey,
+		fallbackDataKey,
+		fallbackHistoryKey,
 	).Err()
 }
