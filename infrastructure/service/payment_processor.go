@@ -3,26 +3,17 @@ package service
 import (
 	"bytes"
 	"fmt"
-	"sync/atomic"
 
 	"github.com/goccy/go-json"
 
 	"net/http"
-	"time"
 )
 
 type processor struct {
-	health      atomic.Bool
+	health      bool
 	minRespTime int
 	url         string
 	orderType   ProcessorType
-}
-
-func (p *processor) resetHealth() {
-	ticker := time.NewTicker(time.Second * 5)
-	for range ticker.C {
-		p.health.Store(false)
-	}
 }
 
 func (p *processor) processWithClient(input PostPaymentProcessor) error {

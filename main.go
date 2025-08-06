@@ -26,7 +26,7 @@ func main() {
 	cfg := fiber.Config{
 		JSONEncoder:           json.Marshal,
 		JSONDecoder:           json.Unmarshal,
-		Concurrency:           4096 * 2,
+		Concurrency:           2048,
 		DisableStartupMessage: true,
 		EnablePrintRoutes:     false,
 		ReduceMemoryUsage:     false,

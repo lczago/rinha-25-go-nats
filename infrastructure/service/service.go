@@ -4,9 +4,10 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"sync/atomic"
+	"time"
 
 	"github.com/goccy/go-json"
+	"github.com/gofiber/fiber/v2/log"
 )
 
 type IPaymentProcessor interface {
@@ -23,28 +24,31 @@ func NewPaymentProcessorService() IPaymentProcessor {
 
 	processors := []*processor{
 		{
-			health:    atomic.Bool{},
 			url:       defaultUrl,
 			orderType: ProcessorTypeDefault,
 		},
 		{
-			health:    atomic.Bool{},
 			url:       fallBackUrl,
 			orderType: ProcessorTypeFallback,
 		},
 	}
-	for _, p := range processors {
-		go p.resetHealth()
-	}
-	return &service{processors}
+
+	s := &service{processors}
+	go func() {
+		ticker := time.NewTicker(time.Second * 5)
+		for range ticker.C {
+			if err := s.CheckHealth(); err != nil {
+				log.Error(err)
+			}
+		}
+	}()
+
+	return s
 }
 
 func (s *service) CheckHealth() error {
 	var healthStatus Health
 	for _, p := range s.Processors {
-		if p.health.Load() {
-			continue
-		}
 		req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/payments/service-health", p.url), nil)
 		if err != nil {
 			return err
@@ -61,7 +65,7 @@ func (s *service) CheckHealth() error {
 			return err
 		}
 
-		p.health.Store(!healthStatus.Failling)
+		p.health = !healthStatus.Failling
 		p.minRespTime = healthStatus.MinResponseTime
 
 		if resp.StatusCode == http.StatusInternalServerError {
@@ -72,16 +76,13 @@ func (s *service) CheckHealth() error {
 }
 
 func (s *service) Process(input PostPaymentProcessor) (ProcessorType, error) {
-	if err := s.CheckHealth(); err != nil {
-		return ProcessorTypeNone, err
-	}
 	var lastRespTime = s.Processors[1].minRespTime
 	for _, p := range s.Processors {
-		if !p.health.Load() {
+		if !p.health {
 			continue
 		}
 
-		if p.minRespTime < 100 || lastRespTime < p.minRespTime {
+		if p.minRespTime < 100 || (lastRespTime*2) < p.minRespTime {
 			if err := p.processWithClient(input); err != nil {
 				return p.orderType, err
 			}
